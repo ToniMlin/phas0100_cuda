@@ -1,4 +1,8 @@
 /*
+ * Solution to the CUDA memory exercise
+ */
+
+/*
  * An exercise on the different types of memory available in CUDA
  */
 
@@ -15,9 +19,8 @@ inline void cudaErrorCheck(cudaError_t err, const char* file, int line)
   }
 }
 
-// Array size
-// HANDSON 2.1 Change the array size to a static __constant__ int
-#define ARRAY_SIZE 65536
+// Array size stored in device constant memory
+static __constant__ int deviceArraySize_;
 
 // CUDA threads per block
 #define nThreads 128
@@ -26,28 +29,25 @@ inline void cudaErrorCheck(cudaError_t err, const char* file, int line)
 __global__
 void reverse(float* devA, float* devB)
 {
-  // HANDSON 2.3 Create a __shared__ temporary array of length nThreads for the swap
-  
-  // Get the index in this block
+  // temporary array for space for the swap
+  __shared__ float tmp[nThreads];
+
   int idx = blockIdx.x * blockDim.x + threadIdx.x;
-  // HANDSON 2.4 Fill the temporary array
+  tmp[nThreads - (threadIdx.x+1)] = devA[idx];
+  __syncthreads();
 
-  // HANDSON 2.5 synchronize the threads
-
-  // HANDSON 2.6 Calculate the initial position of this block in the grid
-  // int blockOffset
-  // Reverse the elements
-  // HANDSON 2.7 Fill the output array with the reversed elements from this block
-  devB[idx] = devA[ARRAY_SIZE - (idx + 1)];
+  // Offset to the correct index in the target array
+  int blockOffset = deviceArraySize_ - (blockIdx.x + 1)*blockDim.x;
+  devB[blockOffset + threadIdx.x] = tmp[threadIdx.x];
 }
 
 // Main host function
 int main( )
 {
-  // HANDSON 2.2 Replace the host array size by a const int
-  //             Here and elsewhere
+  // Array size stored on the host
+  const int hostArraySize = 65536;
   // size of the array in char
-  size_t sizeChar = ARRAY_SIZE * sizeof(float);
+  size_t sizeChar = hostArraySize * sizeof(float);
 
   // Allocate host memory
   float* hostIn = (float*) malloc(sizeChar);
@@ -64,10 +64,15 @@ int main( )
 	      );
 
   // Initialize the arrays
-  for (int i = 0; i < ARRAY_SIZE; i++) {
+  for (int i = 0; i < hostArraySize; i++) {
     hostIn[i] = i;
     hostOut[i] = 0;
   }
+
+  // Copy the size of the array from the host to the device.
+  myCudaCheck(
+	      cudaMemcpyToSymbol( deviceArraySize_, &hostArraySize, sizeof(int))
+	      );
 
   // Copy the input array from the host to the device
   myCudaCheck(
@@ -75,7 +80,7 @@ int main( )
 	      );
 
   // Define the size of the task
-  dim3 blocksPerGrid(ARRAY_SIZE/nThreads);
+  dim3 blocksPerGrid(hostArraySize/nThreads);
   dim3 threadsPerBlock(nThreads);
 
   reverse<<<blocksPerGrid, threadsPerBlock>>>(devIn, devOut);
@@ -92,10 +97,10 @@ int main( )
 
   // Check and print the result
   int nCorrect = 0;
-  for (int i = 0; i < ARRAY_SIZE; i++) {
-    nCorrect += (hostOut[i] == hostIn[ARRAY_SIZE - (i+1)]) ? 1 : 0;
+  for (int i = 0; i < hostArraySize; i++) {
+    nCorrect += (hostOut[i] == hostIn[hostArraySize - (i+1)]) ? 1 : 0;
   }
-  std::cout << ((nCorrect == ARRAY_SIZE) ? "Success! " : "Failure: ");
+  std::cout << ((nCorrect == hostArraySize) ? "Success! " : "Failure: ");
   std::cout << nCorrect  << " elements were correctly swapped." << std::endl;
 
   // Free device memory
